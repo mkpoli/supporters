@@ -139,6 +139,10 @@ export default {
 			});
 		}
 
-		return env.ASSETS.fetch(request);
+		// Sites load roll.js as a cross-origin module script, which browsers refuse without CORS.
+		const asset = await env.ASSETS.fetch(request);
+		const response = new Response(asset.body, asset);
+		response.headers.set('access-control-allow-origin', '*');
+		return response;
 	},
 } satisfies ExportedHandler<Env>;
