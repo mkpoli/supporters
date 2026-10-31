@@ -1,3 +1,5 @@
 node_modules
 .wrangler
 .dev.vars
+kofi-export*.csv
+*.local.sql
