@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Supporters roll</title>
+<script type="module" src="/roll.js"></script>
+<style>
+	:root { color-scheme: light dark; }
+	body { margin: 0; padding: 24px 16px; background: light-dark(#f4f1ee, #0b1510); font: 14px/1.5 Inter, "Segoe UI", system-ui, sans-serif; }
+	.sheet {
+		--sp-ink: light-dark(#c2185b, #ffb3cd); --sp-line: light-dark(#ffc2d6, #6b2c47); --sp-soft: light-dark(#fff1f5, #2f1822);
+		--sp-text: light-dark(#202721, #f4f7f1); --sp-muted: light-dark(#5b665e, #a9bdb0);
+		max-width: 480px; margin: auto; padding: 22px 24px; border-radius: 16px;
+		background: light-dark(#fff, #10241b); color: var(--sp-text); display: flex; flex-direction: column; gap: 14px;
+	}
+	h2 { margin: 0; font: 700 22px/1.2 Georgia, serif; }
+	p { margin: 0; }
+	.ask { font-weight: 700; color: var(--sp-ink); }
+	.kofi { padding: 14px 18px; border-radius: 999px; background: linear-gradient(135deg, #d81b60, #ad1457); color: #fff; font-weight: 700; }
+</style>
+</head>
+<body>
+<div class="sheet">
+	<h2>Sponsor</h2>
+	<p>I build Demo on my own, with no funding behind it. It's free for everyone, and I'd like to keep it that way.</p>
+	<p class="ask">If Demo is useful to you, a tip on Ko-fi gives me time to keep improving it.</p>
+	<div class="kofi">Ko-fi</div>
+	<supporters-roll label="Recent supporters" anonymous="Someone"></supporters-roll>
+</div>
+</body>
+</html>

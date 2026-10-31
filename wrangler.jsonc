@@ -1,0 +1,14 @@
+{
+	// Set the Ko-fi webhook token (Ko-fi → Settings → API → Webhooks) as a secret:
+	//   bunx wrangler secret put KOFI_TOKEN
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "supporters",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-10-01",
+	"assets": { "directory": "public", "binding": "ASSETS", "run_worker_first": true },
+	"d1_databases": [
+		{ "binding": "DB", "database_name": "supporters", "database_id": "00000000-0000-0000-0000-000000000000", "migrations_dir": "migrations" }
+	],
+	"observability": { "enabled": true },
+	"routes": [{ "pattern": "supporters.mkpo.li", "custom_domain": true }]
+}
