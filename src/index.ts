@@ -1,15 +1,21 @@
-/** Ko-fi supporters for every Sponsor dialog.
+/** Ko-fi and OFUSE supporters for every Sponsor dialog.
  *
  *   POST /kofi            Ko-fi webhook (form field `data`, JSON); records the supporter.
+ *   email                 OFUSE's notification mail for a letter with a tip; records the sender,
+ *                         then forwards every message to FORWARD_TO.
  *   GET  /v1/supporters   latest supporters, one entry per person, newest first. No amounts;
  *                         `avatar` is a path on this origin.
  *   GET  /v1/avatar/:id   the supporter's Gravatar, proxied so the email hash stays private.
  *   GET  /roll.js         the <supporters-roll> element (static asset). */
 
+import PostalMime from 'postal-mime';
+
 export interface Env {
 	DB: D1Database;
 	ASSETS: Fetcher;
 	KOFI_TOKEN: string;
+	/** A verified Email Routing destination that receives every message sent to this Worker. */
+	FORWARD_TO?: string;
 }
 
 export type Supporter = { id: number; name: string | null; monthly: boolean; at: string; avatar: string | null };
@@ -26,6 +32,8 @@ export type KofiPayload = {
 };
 
 const LIMIT = 30;
+const ORIGIN = 'https://supporters.mkpo.li';
+const OFUSE_SENDER = 'no_reply@ofuse.me';
 const CORS = { 'access-control-allow-origin': '*' };
 
 export async function sha256(text: string): Promise<string> {
@@ -67,6 +75,33 @@ export async function record(env: Env, data: KofiPayload, hasAvatar: (hash: stri
 		   last_at = max(last_at, ?6)`,
 	)
 		.bind(key, name, emailHash, avatar ? 1 : 0, monthly, at)
+		.run();
+	return true;
+}
+
+/** The sender named in OFUSE's notification for a letter that came with a tip
+ *  ("げんご次郎さんから支援付きレターが届きました。"), or null for any other mail. */
+export function ofuseSupporter(text: string): string | null {
+	const match = text.match(/^\s*(.+?)さんから支援付きレターが届きました/m);
+	return match ? cleanName(match[1]) : null;
+}
+
+/** Email Routing prepends its own Authentication-Results header; any later one came from the
+ *  sender and proves nothing. */
+export function dmarcPassed(headers: { key: string; value: string }[]): boolean {
+	const first = headers.find((h) => h.key.toLowerCase() === 'authentication-results')?.value ?? '';
+	return /^\s*mx\.cloudflare\.net\s*;/i.test(first) && /\bdmarc=pass\b/i.test(first);
+}
+
+/** Records one OFUSE tip by the sender's name. Returns false when the message was seen before. */
+export async function recordOfuse(env: Env, messageId: string, name: string, at: string): Promise<boolean> {
+	const fresh = await env.DB.prepare('INSERT OR IGNORE INTO seen (message_id) VALUES (?)').bind(`ofuse:${messageId}`).run();
+	if (!fresh.meta.changes) return false;
+	await env.DB.prepare(
+		`INSERT INTO supporters (key, name, last_at) VALUES (?1, ?2, ?3)
+		 ON CONFLICT (key) DO UPDATE SET name = ?2, last_at = max(last_at, ?3)`,
+	)
+		.bind(`ofuse:${await sha256(name.toLowerCase())}`, name, at)
 		.run();
 	return true;
 }
@@ -144,5 +179,17 @@ export default {
 		const response = new Response(asset.body, asset);
 		response.headers.set('access-control-allow-origin', '*');
 		return response;
+	},
+
+	async email(message, env, ctx): Promise<void> {
+		const mail = await PostalMime.parse(await new Response(message.raw).arrayBuffer());
+		const from = (mail.from?.address ?? '').toLowerCase();
+		const name = from === OFUSE_SENDER && dmarcPassed(mail.headers) ? ofuseSupporter(mail.text ?? '') : null;
+		if (name && mail.messageId) {
+			const sent = new Date(mail.date ?? '');
+			const at = (Number.isNaN(sent.getTime()) ? new Date() : sent).toISOString();
+			if (await recordOfuse(env, mail.messageId, name, at)) ctx.waitUntil(caches.default.delete(`${ORIGIN}/v1/supporters`));
+		}
+		if (env.FORWARD_TO) await message.forward(env.FORWARD_TO);
 	},
 } satisfies ExportedHandler<Env>;

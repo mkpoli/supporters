@@ -1,6 +1,6 @@
 # supporters
 
-The latest Ko-fi supporters for every Sponsor dialog, as a looping strip of icons, names and how long ago they tipped. Amounts and messages are never stored or shown. A private tip appears as "Someone".
+The latest Ko-fi and OFUSE supporters for every Sponsor dialog, as a looping strip of icons, names and how long ago they tipped. Amounts and messages are never stored or shown. A private tip appears as "Someone".
 
 ```html
 <script type="module" src="https://supporters.mkpo.li/roll.js"></script>
@@ -18,12 +18,21 @@ bunx wrangler secret put KOFI_TOKEN         # Ko-fi → Settings → API → Web
 bunx wrangler deploy
 ```
 
-Then set the Ko-fi webhook URL to `https://supporters.mkpo.li/kofi`. To hide a supporter:
+Then set the Ko-fi webhook URL to `https://supporters.mkpo.li/kofi`.
+
+OFUSE has no webhook; it sends a notification mail for every letter. To record its tips:
+
+1. `bunx wrangler secret put FORWARD_TO` with your inbox address. It must be a verified destination in Email Routing; the Worker forwards every message it receives there.
+2. Cloudflare dashboard → mkpo.li → Email Routing → Routing rules: create `ofuse@mkpo.li` with the action **Send to a Worker** → `supporters`.
+3. In OFUSE's account settings, change the email address to `ofuse@mkpo.li`.
+
+Only a letter that came with a tip counts, and only when Email Routing reports `dmarc=pass` for `no_reply@ofuse.me`. A plain fan letter, any other mail, and a forged copy are forwarded without being recorded. To hide a supporter:
 `bunx wrangler d1 execute supporters --remote --command "UPDATE supporters SET hidden = 1 WHERE id = <id>"`.
 
 ## API
 
 - `POST /kofi` — Ko-fi webhook. Checks the verification token, ignores repeated message ids, and keeps one row per supporter (keyed by email hash, or by name when Ko-fi sends no email).
+- `email` — OFUSE's notification for a letter with a tip (`げんご次郎さんから支援付きレターが届きました。`). Keeps one row per name and ignores a repeated Message-ID. Membership and tipped-comment notifications are forwarded but not recorded yet; their wording has not been seen.
 - `GET /v1/supporters` — up to 30 supporters, newest first: `{ id, name, monthly, at, avatar }`. `name` is `null` for private tips. Cached for 5 minutes; a new tip clears the cache.
 - `GET /v1/avatar/:id` — the supporter's Gravatar, fetched by the Worker so the email hash never reaches the browser.
 
