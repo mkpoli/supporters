@@ -23,8 +23,14 @@ Then set the Ko-fi webhook URL to `https://supporters.mkpo.li/kofi`.
 OFUSE has no webhook; it sends a notification mail for every letter. To record its tips:
 
 1. `bunx wrangler secret put FORWARD_TO` with your inbox address. It must be a verified destination in Email Routing; the Worker forwards every message it receives there.
-2. Cloudflare dashboard → mkpo.li → Email Routing → Routing rules: create `ofuse@mkpo.li` with the action **Send to a Worker** → `supporters`.
-3. In OFUSE's account settings, change the email address to `ofuse@mkpo.li`.
+2. Route the address OFUSE mails to (the account's email, `mkpoli@mkpo.li`) to the Worker. Every message to that address then passes through the Worker on its way to `FORWARD_TO`:
+
+   ```sh
+   cf email-routing rules list-account -z mkpo.li
+   cf email-routing rules update <rule-id> -z mkpo.li \
+     --matchers '[{"type":"literal","field":"to","value":"mkpoli@mkpo.li"}]' \
+     --actions '[{"type":"worker","value":["supporters"]}]' --enabled true
+   ```
 
 Only a letter that came with a tip counts, and only when Email Routing reports `dmarc=pass` for `no_reply@ofuse.me`. A plain fan letter, any other mail, and a forged copy are forwarded without being recorded. To hide a supporter:
 `bunx wrangler d1 execute supporters --remote --command "UPDATE supporters SET hidden = 1 WHERE id = <id>"`.
