@@ -1,15 +1,21 @@
-/** Ko-fi supporters for every Sponsor dialog.
+/** Ko-fi and OFUSE supporters for every Sponsor dialog.
  *
  *   POST /kofi            Ko-fi webhook (form field `data`, JSON); records the supporter.
+ *   email                 OFUSE's notification mail for a letter with a tip; records the sender,
+ *                         then forwards every message to FORWARD_TO.
  *   GET  /v1/supporters   latest supporters, one entry per person, newest first. No amounts;
  *                         `avatar` is a path on this origin.
  *   GET  /v1/avatar/:id   the supporter's Gravatar, proxied so the email hash stays private.
  *   GET  /roll.js         the <supporters-roll> element (static asset). */
 
+import PostalMime from 'postal-mime';
+
 export interface Env {
 	DB: D1Database;
 	ASSETS: Fetcher;
 	KOFI_TOKEN: string;
+	/** A verified Email Routing destination that receives every message sent to this Worker. */
+	FORWARD_TO?: string;
 }
 
 export type Supporter = { id: number; name: string | null; monthly: boolean; at: string; avatar: string | null };
@@ -26,6 +32,8 @@ export type KofiPayload = {
 };
 
 const LIMIT = 30;
+const ORIGIN = 'https://supporters.mkpo.li';
+const OFUSE_SENDER = 'no_reply@ofuse.me';
 const CORS = { 'access-control-allow-origin': '*' };
 
 export async function sha256(text: string): Promise<string> {
@@ -69,6 +77,41 @@ export async function record(env: Env, data: KofiPayload, hasAvatar: (hash: stri
 		.bind(key, name, emailHash, avatar ? 1 : 0, monthly, at)
 		.run();
 	return true;
+}
+
+/** The sender named on the first line of OFUSE's notification for a letter that came with a tip
+ *  ("げんご次郎さんから支援付きレターが届きました。"), or null for any other mail. Later lines can
+ *  quote text a reader wrote, so only the first one counts. */
+export function ofuseSupporter(text: string): string | null {
+	const first = text.split('\n').find((line) => line.trim()) ?? '';
+	const match = first.match(/^\s*(.+?)さんから支援付きレターが届きました/);
+	return match ? cleanName(match[1]) : null;
+}
+
+/** Whether Email Routing found the mail DMARC-aligned with ofuse.me. Email Routing prepends its own
+ *  Authentication-Results header, and `Headers.get` joins repeated headers with ", ", so only the
+ *  text before the next "<authserv-id>;" is Cloudflare's; later ones came from the sender. */
+export function ofuseAuthenticated(authenticationResults: string | null): boolean {
+	const first = (authenticationResults ?? '').split(/,\s*(?=[\w.-]+\s*;)/)[0];
+	return (
+		/^\s*mx\.cloudflare\.net\s*;/i.test(first) &&
+		/\bdmarc=pass\b/i.test(first) &&
+		/\bheader\.from=ofuse\.me\b/i.test(first)
+	);
+}
+
+/** Records one OFUSE tip by the sender's name, in one transaction with its Message-ID so a retried
+ *  delivery neither loses nor repeats it. Returns false when the message was seen before. */
+export async function recordOfuse(env: Env, messageId: string, name: string, at: string): Promise<boolean> {
+	const [seen] = await env.DB.batch([
+		env.DB.prepare('INSERT OR IGNORE INTO seen (message_id) VALUES (?)').bind(`ofuse:${messageId}`),
+		env.DB.prepare(
+			`INSERT INTO supporters (key, name, last_at)
+			 SELECT ?1, ?2, ?3 WHERE changes() > 0
+			 ON CONFLICT (key) DO UPDATE SET name = ?2, last_at = max(last_at, ?3)`,
+		).bind(`ofuse:${await sha256(name.toLowerCase())}`, name, at),
+	]);
+	return seen.meta.changes > 0;
 }
 
 export async function list(env: Env): Promise<Supporter[]> {
@@ -144,5 +187,37 @@ export default {
 		const response = new Response(asset.body, asset);
 		response.headers.set('access-control-allow-origin', '*');
 		return response;
+	},
+
+	async email(message, env, ctx): Promise<void> {
+		if (!env.FORWARD_TO) {
+			console.error('FORWARD_TO is not set; rejecting instead of dropping the message.');
+			message.setReject('Mailbox not configured');
+			return;
+		}
+		try {
+			if (message.headers.get('from')?.toLowerCase().includes(OFUSE_SENDER) && ofuseAuthenticated(message.headers.get('authentication-results'))) {
+				const mail = await PostalMime.parse(await new Response(message.raw).arrayBuffer());
+				const senders = mail.headers.filter((h) => h.key.toLowerCase() === 'from').length;
+				const single = senders === 1 && mail.from?.address?.toLowerCase() === OFUSE_SENDER && !mail.from.group;
+				const name = single ? ofuseSupporter(mail.text ?? '') : null;
+				if (name && !mail.messageId) console.error('OFUSE tip without a Message-ID; not recorded.', name);
+				if (name && mail.messageId) {
+					const sent = new Date(mail.date ?? '');
+					// A clock ahead of ours would keep the supporter first on the roll for good.
+					const at = new Date(Number.isNaN(sent.getTime()) ? Date.now() : Math.min(sent.getTime(), Date.now())).toISOString();
+					if (await recordOfuse(env, mail.messageId, name, at)) ctx.waitUntil(caches.default.delete(`${ORIGIN}/v1/supporters`));
+				}
+			}
+		} catch (error) {
+			// Recording a tip must never keep the mail itself from arriving.
+			console.error('OFUSE tip not recorded:', error);
+		}
+		try {
+			await message.forward(env.FORWARD_TO);
+		} catch (error) {
+			console.error(`Forward to FORWARD_TO failed:`, error);
+			throw error;
+		}
 	},
 } satisfies ExportedHandler<Env>;

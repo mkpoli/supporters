@@ -13,5 +13,8 @@
 		"@types/bun": "^1.3.14",
 		"typescript": "^5.5.2",
 		"wrangler": "^4.90.0"
+	},
+	"dependencies": {
+		"postal-mime": "^4.2.0"
 	}
 }
