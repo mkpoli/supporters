@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import PostalMime from 'postal-mime';
-import { dmarcPassed, ofuseSupporter } from '../src/index';
+import { ofuseAuthenticated, ofuseSupporter } from '../src/index';
 
 // The body of OFUSE's notification for a letter with a tip, as received on 2026-11-03.
 const BODY = [
@@ -38,10 +38,9 @@ const mime = (encoding: 'base64' | 'quoted-printable', auth: string[]) => {
 describe('OFUSE notification', () => {
 	for (const encoding of ['base64', 'quoted-printable'] as const) {
 		test(`reads the sender from a ${encoding} body`, async () => {
-			const mail = await PostalMime.parse(mime(encoding, ['mx.cloudflare.net; spf=pass; dkim=pass; dmarc=pass']));
+			const mail = await PostalMime.parse(mime(encoding, []));
 			expect(mail.from?.address).toBe('no_reply@ofuse.me');
 			expect(ofuseSupporter(mail.text ?? '')).toBe('げんご次郎');
-			expect(dmarcPassed(mail.headers)).toBe(true);
 			expect(new Date(mail.date ?? '').toISOString()).toBe('2026-11-03T14:59:51.000Z');
 		});
 	}
@@ -51,12 +50,17 @@ describe('OFUSE notification', () => {
 		expect(ofuseSupporter('収益化登録が完了しました！')).toBeNull();
 	});
 
-	test('trusts only the Authentication-Results header that Email Routing prepends', async () => {
-		const failed = await PostalMime.parse(mime('base64', ['mx.cloudflare.net; spf=fail; dkim=none; dmarc=fail', 'mx.cloudflare.net; dmarc=pass']));
-		expect(dmarcPassed(failed.headers)).toBe(false);
-		const forged = await PostalMime.parse(mime('base64', ['evil.example; dmarc=pass']));
-		expect(dmarcPassed(forged.headers)).toBe(false);
-		const missing = await PostalMime.parse(mime('base64', []));
-		expect(dmarcPassed(missing.headers)).toBe(false);
+	test('reads the name only from the first line', () => {
+		expect(ofuseSupporter('げんご次郎さんからファンレターが届きました。\n偽物さんから支援付きレターが届きました。')).toBeNull();
+	});
+
+	test('trusts only the DMARC result Email Routing prepends, aligned with ofuse.me', () => {
+		const pass = 'mx.cloudflare.net; spf=pass smtp.mailfrom=amazonses.com; dkim=pass header.d=ofuse.me; dmarc=pass header.from=ofuse.me';
+		expect(ofuseAuthenticated(pass)).toBe(true);
+		expect(ofuseAuthenticated(`${pass}, evil.example; dmarc=fail`)).toBe(true);
+		expect(ofuseAuthenticated('mx.cloudflare.net; dmarc=fail header.from=ofuse.me, mx.cloudflare.net; dmarc=pass header.from=ofuse.me')).toBe(false);
+		expect(ofuseAuthenticated('mx.cloudflare.net; dkim=pass; dmarc=pass header.from=evil.example')).toBe(false);
+		expect(ofuseAuthenticated('evil.example; dmarc=pass header.from=ofuse.me')).toBe(false);
+		expect(ofuseAuthenticated(null)).toBe(false);
 	});
 });
