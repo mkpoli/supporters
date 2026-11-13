@@ -64,3 +64,18 @@ describe('OFUSE notification', () => {
 		expect(ofuseAuthenticated(null)).toBe(false);
 	});
 });
+
+describe('recordOfuseMail', () => {
+	const noDb = { DB: null } as unknown as import('../src/index').Env;
+	const ctx = { waitUntil() {} };
+	test('ignores mail that is not from OFUSE', async () => {
+		const { recordOfuseMail } = await import('../src/index');
+		const raw = new TextEncoder().encode('From: a@example.org\r\nTo: mkpoli@mkpo.li\r\nSubject: hi\r\n\r\nhello').buffer as ArrayBuffer;
+		expect(await recordOfuseMail(noDb, raw, ctx)).toBe(false);
+	});
+	test('ignores an OFUSE tip that Email Routing did not authenticate', async () => {
+		const { recordOfuseMail } = await import('../src/index');
+		const raw = new TextEncoder().encode(mime('base64', ['ofuse.me; dmarc=pass header.from=ofuse.me'])).buffer as ArrayBuffer;
+		expect(await recordOfuseMail(noDb, raw, ctx)).toBe(false);
+	});
+});

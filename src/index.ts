@@ -1,8 +1,8 @@
 /** Ko-fi and OFUSE supporters for every Sponsor dialog.
  *
  *   POST /kofi            Ko-fi webhook (form field `data`, JSON); records the supporter.
- *   email                 OFUSE's notification mail for a letter with a tip; records the sender,
- *                         then forwards every message to FORWARD_TO.
+ *   OfuseInbox.record     RPC from the mailbox Worker with each raw message it receives; records
+ *                         the sender of OFUSE's notification for a letter with a tip.
  *   GET  /v1/supporters   latest supporters, one entry per person, newest first. No amounts;
  *                         `avatar` is a path on this origin.
  *   GET  /v1/avatar/:id   the supporter's Gravatar, proxied so the email hash stays private.
@@ -14,8 +14,6 @@ export interface Env {
 	DB: D1Database;
 	ASSETS: Fetcher;
 	KOFI_TOKEN: string;
-	/** A verified Email Routing destination that receives every message sent to this Worker. */
-	FORWARD_TO?: string;
 }
 
 export type Supporter = { id: number; name: string | null; monthly: boolean; at: string; avatar: string | null };
@@ -188,36 +186,26 @@ export default {
 		response.headers.set('access-control-allow-origin', '*');
 		return response;
 	},
-
-	async email(message, env, ctx): Promise<void> {
-		if (!env.FORWARD_TO) {
-			console.error('FORWARD_TO is not set; rejecting instead of dropping the message.');
-			message.setReject('Mailbox not configured');
-			return;
-		}
-		try {
-			if (message.headers.get('from')?.toLowerCase().includes(OFUSE_SENDER) && ofuseAuthenticated(message.headers.get('authentication-results'))) {
-				const mail = await PostalMime.parse(await new Response(message.raw).arrayBuffer());
-				const senders = mail.headers.filter((h) => h.key.toLowerCase() === 'from').length;
-				const single = senders === 1 && mail.from?.address?.toLowerCase() === OFUSE_SENDER && !mail.from.group;
-				const name = single ? ofuseSupporter(mail.text ?? '') : null;
-				if (name && !mail.messageId) console.error('OFUSE tip without a Message-ID; not recorded.', name);
-				if (name && mail.messageId) {
-					const sent = new Date(mail.date ?? '');
-					// A clock ahead of ours would keep the supporter first on the roll for good.
-					const at = new Date(Number.isNaN(sent.getTime()) ? Date.now() : Math.min(sent.getTime(), Date.now())).toISOString();
-					if (await recordOfuse(env, mail.messageId, name, at)) ctx.waitUntil(caches.default.delete(`${ORIGIN}/v1/supporters`));
-				}
-			}
-		} catch (error) {
-			// Recording a tip must never keep the mail itself from arriving.
-			console.error('OFUSE tip not recorded:', error);
-		}
-		try {
-			await message.forward(env.FORWARD_TO);
-		} catch (error) {
-			console.error(`Forward to FORWARD_TO failed:`, error);
-			throw error;
-		}
-	},
 } satisfies ExportedHandler<Env>;
+
+/** Records the tip in OFUSE's notification for a letter, when `raw` is one. Only a message Email
+ *  Routing found DMARC-aligned with ofuse.me counts. Returns whether a new tip was recorded. */
+export async function recordOfuseMail(env: Env, raw: ArrayBuffer, ctx: Pick<ExecutionContext, 'waitUntil'>): Promise<boolean> {
+	const mail = await PostalMime.parse(raw);
+	const auth = mail.headers.filter((h) => h.key === 'authentication-results').map((h) => h.value);
+	const senders = mail.headers.filter((h) => h.key === 'from').length;
+	const single = senders === 1 && mail.from?.address?.toLowerCase() === OFUSE_SENDER && !mail.from.group;
+	if (!single || !ofuseAuthenticated(auth.join(', '))) return false;
+	const name = ofuseSupporter(mail.text ?? '');
+	if (!name) return false;
+	if (!mail.messageId) {
+		console.error('OFUSE tip without a Message-ID; not recorded.', name);
+		return false;
+	}
+	const sent = new Date(mail.date ?? '');
+	// A clock ahead of ours would keep the supporter first on the roll for good.
+	const at = new Date(Number.isNaN(sent.getTime()) ? Date.now() : Math.min(sent.getTime(), Date.now())).toISOString();
+	const recorded = await recordOfuse(env, mail.messageId, name, at);
+	if (recorded) ctx.waitUntil(caches.default.delete(`${ORIGIN}/v1/supporters`));
+	return recorded;
+}
