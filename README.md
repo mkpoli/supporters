@@ -20,25 +20,15 @@ bunx wrangler deploy
 
 Then set the Ko-fi webhook URL to `https://supporters.mkpo.li/kofi`.
 
-OFUSE has no webhook; it sends a notification mail for every letter. To record its tips:
+OFUSE has no webhook; it sends a notification mail for every letter to the account's address, `mkpoli@mkpo.li`. The mailbox Worker that receives that address passes each message to `OfuseInbox.record` over a service binding.
 
-1. `bunx wrangler secret put FORWARD_TO` with your inbox address. It must be a verified destination in Email Routing; the Worker forwards every message it receives there.
-2. Route the address OFUSE mails to (the account's email, `mkpoli@mkpo.li`) to the Worker. Every message to that address then passes through the Worker on its way to `FORWARD_TO`:
-
-   ```sh
-   cf email-routing rules list-account -z mkpo.li
-   cf email-routing rules update <rule-id> -z mkpo.li \
-     --matchers '[{"type":"literal","field":"to","value":"mkpoli@mkpo.li"}]' \
-     --actions '[{"type":"worker","value":["supporters"]}]' --enabled true
-   ```
-
-Only a letter that came with a tip counts, and only when Email Routing reports `dmarc=pass` for `no_reply@ofuse.me`. A plain fan letter, any other mail, and a forged copy are forwarded without being recorded. To hide a supporter:
+Only a letter that came with a tip counts, and only when Email Routing reports `dmarc=pass` for `no_reply@ofuse.me`. A plain fan letter, any other mail, and a forged copy are not recorded. To hide a supporter:
 `bunx wrangler d1 execute supporters --remote --command "UPDATE supporters SET hidden = 1 WHERE id = <id>"`.
 
 ## API
 
 - `POST /kofi` — Ko-fi webhook. Checks the verification token, ignores repeated message ids, and keeps one row per supporter (keyed by email hash, or by name when Ko-fi sends no email).
-- `email` — OFUSE's notification for a letter with a tip (`げんご次郎さんから支援付きレターが届きました。`). Keeps one row per name and ignores a repeated Message-ID. Membership and tipped-comment notifications are forwarded but not recorded yet; their wording has not been seen.
+- `OfuseInbox.record(raw)` — RPC for OFUSE's notification for a letter with a tip (`げんご次郎さんから支援付きレターが届きました。`). Keeps one row per name and ignores a repeated Message-ID. Membership and tipped-comment notifications are not recorded yet; their wording has not been seen.
 - `GET /v1/supporters` — up to 30 supporters, newest first: `{ id, name, monthly, at, avatar }`. `name` is `null` for private tips. Cached for 5 minutes; a new tip clears the cache.
 - `GET /v1/avatar/:id` — the supporter's Gravatar, fetched by the Worker so the email hash never reaches the browser.
 
